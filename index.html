@@ -103,6 +103,31 @@
   .readout .ro-meta { font-size: 9.5px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--blue); margin-top: 3px; }
   .readout .ro-note { color: var(--muted); font-size: 12px; line-height: 1.65; margin-top: 7px; max-width: 78ch; }
   .card.sel { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+  .card .kill {
+    position: absolute; top: 3px; right: 3px; z-index: 2; padding: 0;
+    width: 16px; height: 16px; border-radius: 50%; line-height: 1;
+    border: 1px solid #3a4150; background: rgba(8,10,14,.88); color: var(--muted);
+    font-size: 11px; font-weight: 700; font-family: inherit;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+  }
+  .card:hover .kill, .card:focus-within .kill { opacity: 1; }
+  .card .kill:hover { color: #ff6b6b; border-color: #ff6b6b; }
+  .card .kill:focus-visible { opacity: 1; outline: 2px solid var(--blue); outline-offset: 1px; }
+  .pool .card .kill { width: 14px; height: 14px; font-size: 9px; top: 2px; right: 2px; }
+  /* no hover to reveal it on touch, and a finger needs a bigger target than a cursor */
+  @media (hover: none) {
+    .card .kill, .pool .card .kill { opacity: 1; width: 24px; height: 24px; font-size: 15px; top: 3px; right: 3px; }
+  }
+  .pool-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .pool-head .pool-title { margin-bottom: 0; }
+  .restore {
+    background: none; border: none; padding: 2px 0; cursor: pointer;
+    color: var(--blue); font-family: inherit; font-size: 10px;
+    letter-spacing: 1.5px; font-weight: 700; text-transform: uppercase;
+  }
+  .restore:hover { text-decoration: underline; }
+  .restore:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .card:focus-visible, .controls button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .tier-drop.armed { outline: 1px dashed var(--blue-dim); outline-offset: -4px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
@@ -148,7 +173,10 @@
 <div class="layout">
   <div class="board" id="board"></div>
   <aside class="pool-wrap">
-    <div class="pool-title">THE LINEUP</div>
+    <div class="pool-head">
+      <div class="pool-title">THE LINEUP</div>
+      <button id="btn-restore" type="button" class="restore" hidden></button>
+    </div>
     <div class="pool tier-drop" id="pool" data-tier="pool"></div>
   </aside>
 </div>
@@ -157,7 +185,8 @@
 
 <p class="hint">
   <b>Drag</b> a compound into a tier, or <b>tap</b> it and then tap a tier to place it on touch screens.
-  <b>Double-click</b> a card to remove it, and <b>drop your own image</b> onto a card to replace its artwork.
+  Click the <b>&times;</b> on a card to remove it &mdash; removed cards come back from
+  <b>Restore</b> above the lineup. <b>Drop your own image</b> onto a card to replace its artwork.
   Your board saves automatically in this browser.
 </p>
 
@@ -181,7 +210,7 @@ function defaultState() {
   const layout = { pool: [] };
   TIERS.forEach(t => layout[t.id] = []);
   CARD_REGISTRY.forEach(c => layout.pool.push(c.id));
-  return { layout, customImgs: {}, customCards: [] };
+  return { layout, customImgs: {}, customCards: [], removed: [] };
 }
 
 function load() {
@@ -192,8 +221,12 @@ function load() {
       if (state.layout) {
         state.customImgs = state.customImgs || {};
         state.customCards = state.customCards || [];
+        state.removed = state.removed || [];
         const present = new Set(Object.values(state.layout).flat());
-        CARD_REGISTRY.forEach(c => { if (!present.has(c.id)) state.layout.pool.push(c.id); });
+        const removed = new Set(state.removed);
+        CARD_REGISTRY.forEach(c => {
+          if (!present.has(c.id) && !removed.has(c.id)) state.layout.pool.push(c.id);
+        });
         return;
       }
     }
@@ -242,7 +275,16 @@ function makeCard(c) {
   name.className = 'name';
   name.textContent = c.name;
 
-  el.appendChild(thumb); el.appendChild(name);
+  const kill = document.createElement('button');
+  kill.type = 'button';
+  kill.className = 'kill';
+  kill.textContent = '\u00d7';
+  kill.title = 'Remove ' + c.name;
+  kill.setAttribute('aria-label', 'Remove ' + c.name);
+  kill.draggable = false;
+  kill.addEventListener('click', e => { e.stopPropagation(); removeCard(c.id); });
+
+  el.appendChild(thumb); el.appendChild(name); el.appendChild(kill);
   if (c.note) el.title = c.name + ' \u2014 ' + c.note;
 
   el.addEventListener('dragstart', e => {
@@ -276,15 +318,20 @@ function makeCard(c) {
     }
   });
 
-  el.addEventListener('dblclick', () => {
-    if (!confirm('Remove "' + c.name + '" from the board?')) return;
-    Object.keys(state.layout).forEach(k => state.layout[k] = state.layout[k].filter(x => x !== c.id));
-    state.customCards = (state.customCards || []).filter(x => x.id !== c.id);
-    if (selected === c.id) selected = null;
-    save(); render();
-  });
-
   return el;
+}
+
+function removeCard(id) {
+  Object.keys(state.layout).forEach(k => state.layout[k] = state.layout[k].filter(x => x !== id));
+  if (!state.removed.includes(id)) state.removed.push(id);
+  if (selected === id) selected = null;
+  save(); render();
+}
+
+function restoreRemoved() {
+  state.removed.forEach(id => { if (cardById(id)) state.layout.pool.push(id); });
+  state.removed = [];
+  save(); render();
 }
 
 function place(id, tier, beforeId) {
@@ -337,6 +384,13 @@ function renderReadout() {
   ro.appendChild(n); if (m.textContent) ro.appendChild(m); ro.appendChild(t);
 }
 
+function renderRestore() {
+  const btn = document.getElementById('btn-restore');
+  const n = state.removed.filter(id => cardById(id)).length;
+  btn.hidden = n === 0;
+  btn.textContent = 'Restore ' + n + ' removed';
+}
+
 function render() {
   const board = document.getElementById('board');
   board.innerHTML = '';
@@ -362,6 +416,7 @@ function render() {
   pool.innerHTML = '';
   pool.classList.toggle('armed', !!selected);
   (state.layout.pool || []).forEach(id => { const c = cardById(id); if (c) pool.appendChild(makeCard(c)); });
+  renderRestore();
   renderReadout();
 }
 
@@ -383,6 +438,8 @@ function shrinkToDataUrl(file, cb) {
 }
 
 wireDropZone(document.getElementById('pool'));
+
+document.getElementById('btn-restore').addEventListener('click', restoreRemoved);
 
 document.getElementById('btn-add').addEventListener('click', () => {
   const name = prompt('Card name:');
